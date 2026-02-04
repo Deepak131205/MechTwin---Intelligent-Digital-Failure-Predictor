@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>MechTwin – Virtual Gearbox Digital Twin</title>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<style>
+body{
+    margin:0;
+    font-family:Segoe UI,Arial;
+    background:#0b0f16;
+    color:#fff;
+}
+header{
+    background:#121826;
+    padding:16px;
+    font-size:22px;
+    font-weight:600;
+    text-align:center;
+}
+.container{
+    display:flex;
+    height:calc(100vh - 64px);
+}
+.controls{
+    width:32%;
+    padding:18px;
+    background:#121826;
+    overflow-y:auto;
+}
+.dashboard{
+    width:68%;
+    padding:18px;
+}
+.card{
+    background:#1b2233;
+    padding:16px;
+    border-radius:12px;
+    margin-bottom:16px;
+}
+label{margin-top:12px;display:block;}
+input[type=range]{width:100%}
+
+.safe{color:#4dff88;font-weight:700}
+.warn{color:#ffb84d;font-weight:700}
+.crit{color:#ff4d4d;font-weight:700}
+
+/* ===== VIRTUAL GEARBOX ===== */
+.gearbox-container{
+    perspective:1200px;
+    height:300px;
+}
+.gear-system{
+    width:300px;
+    height:300px;
+    margin:auto;
+    position:relative;
+    transform-style:preserve-3d;
+    transform:rotateX(20deg);
+}
+.gear{
+    position:absolute;
+    border-radius:50%;
+    background:
+      repeating-conic-gradient(
+        #bbb 0deg 7deg,
+        #333 7deg 14deg
+      );
+    box-shadow:
+      inset 0 0 15px rgba(255,255,255,0.25),
+      0 15px 40px rgba(0,0,0,0.8);
+}
+.gear.big{
+    width:180px;height:180px;
+    top:60px;left:60px;
+}
+.gear.medium{
+    width:120px;height:120px;
+    top:20px;left:180px;
+}
+.gear.small{
+    width:90px;height:90px;
+    top:180px;left:190px;
+}
+
+/* Failure shake */
+.failed{
+    animation:shake .12s infinite;
+}
+@keyframes shake{
+    0%{transform:translate(0,0) rotateX(20deg);}
+    25%{transform:translate(3px,1px) rotateX(20deg);}
+    50%{transform:translate(-3px,-2px) rotateX(20deg);}
+    75%{transform:translate(2px,-3px) rotateX(20deg);}
+    100%{transform:translate(0,0) rotateX(20deg);}
+}
+
+/* Chart */
+canvas{height:260px!important;}
+</style>
+</head>
+
+<body>
+
+<header>
+MechTwin — Virtual Gearbox Digital Twin with Failure Simulation
+</header>
+
+<div class="container">
+
+<!-- LEFT -->
+<div class="controls">
+
+<div class="card">
+<h3>Operating Parameters</h3>
+
+<label>Tolerance (mm): <span id="tolVal">0.05</span></label>
+<input type="range" min="0.01" max="0.5" step="0.01" value="0.05" id="tolerance">
+
+<label>Load (kg): <span id="loadVal">60</span></label>
+<input type="range" min="10" max="200" step="5" value="60" id="load">
+
+<label>Speed (RPM): <span id="rpmVal">900</span></label>
+<input type="range" min="300" max="3000" step="100" value="900" id="rpm">
+</div>
+
+<div class="card">
+<h3>System Health</h3>
+<p>Stress: <b id="stress">Normal</b></p>
+<p>Vibration: <b id="vibration">Stable</b></p>
+<p>Efficiency: <b><span id="eff">100</span>%</b></p>
+<p>Wear: <b><span id="wear">0</span>%</b></p>
+<p>Failure Probability: <b><span id="failProb">0</span>%</b></p>
+<p id="status" class="safe">✔ System Operating Safely</p>
+</div>
+
+<div class="card">
+<h3>🧠 Failure Explanation</h3>
+<p id="explain">
+System is within design limits.
+</p>
+</div>
+
+</div>
+
+<!-- RIGHT -->
+<div class="dashboard">
+
+<div class="card">
+<h3>Virtual Gearbox (3D Digital Twin)</h3>
+<div class="gearbox-container">
+<div class="gear-system" id="gearSystem">
+<div class="gear big" id="g1"></div>
+<div class="gear medium" id="g2"></div>
+<div class="gear small" id="g3"></div>
+</div>
+</div>
+</div>
+
+<div class="card">
+<h3>Vibration vs RPM</h3>
+<canvas id="chart"></canvas>
+</div>
+
+</div>
+</div>
+
+<script>
+const tol=document.getElementById("tolerance");
+const load=document.getElementById("load");
+const rpm=document.getElementById("rpm");
+
+const tolVal=document.getElementById("tolVal");
+const loadVal=document.getElementById("loadVal");
+const rpmVal=document.getElementById("rpmVal");
+
+const stress=document.getElementById("stress");
+const vibration=document.getElementById("vibration");
+const eff=document.getElementById("eff");
+const wearTxt=document.getElementById("wear");
+const failProbTxt=document.getElementById("failProb");
+const status=document.getElementById("status");
+const explain=document.getElementById("explain");
+
+const g1=document.getElementById("g1");
+const g2=document.getElementById("g2");
+const g3=document.getElementById("g3");
+const gearSystem=document.getElementById("gearSystem");
+
+let wear=0,heat=0,time=0,angle=0,failed=false;
+
+/* Chart */
+const chart=new Chart(document.getElementById("chart"),{
+ type:"line",
+ data:{labels:[],datasets:[{
+  label:"Vibration Amplitude",
+  data:[],
+  borderWidth:3,
+  tension:.45
+ }]},
+ options:{
+  animation:false,
+  scales:{y:{beginAtZero:true}}
+ }
+});
+
+function simulate(){
+ if(failed)return;
+
+ tolVal.innerText=tol.value;
+ loadVal.innerText=load.value;
+ rpmVal.innerText=rpm.value;
+
+ let risk = tol.value*35 + load.value*0.3 + rpm.value*0.02;
+
+ wear += risk*0.002;
+ heat += rpm.value*0.0006;
+ wear=Math.min(wear,100);
+
+ let failProb = wear*1.1 + heat*0.4;
+
+ /* Gear animation */
+ angle += rpm.value/600;
+ g1.style.transform=`rotate(${angle}deg)`;
+ g2.style.transform=`rotate(${-angle*1.4}deg)`;
+ g3.style.transform=`rotate(${angle*2}deg)`;
+
+ let vib = risk + wear*0.6 + Math.random()*6;
+
+ if(wear>=100 || failProb>=95){
+  failed=true;
+  status.innerText="💥 MECHANICAL FAILURE OCCURRED";
+  status.className="crit";
+  stress.innerText="FAILED";
+  vibration.innerText="COLLAPSE";
+  eff.innerText="0";
+  wearTxt.innerText="100";
+  failProbTxt.innerText="100";
+  explain.innerHTML=
+   "• Excessive tolerance mismatch<br>"+
+   "• High RPM thermal stress<br>"+
+   "• Load amplified vibration resonance<br>"+
+   "<b>Gear teeth fatigue → seizure</b>";
+  gearSystem.classList.add("failed");
+  return;
+ }
+
+ if(failProb>70){
+  status.innerText="⚠ Failure Imminent";
+  status.className="crit";
+  stress.innerText="Critical";
+  vibration.innerText="Violent";
+ }else if(failProb>40){
+  status.innerText="⚠ Degradation Detected";
+  status.className="warn";
+  stress.innerText="High";
+  vibration.innerText="Unstable";
+ }else{
+  status.innerText="✔ System Operating Safely";
+  status.className="safe";
+  stress.innerText="Normal";
+  vibration.innerText="Stable";
+ }
+
+ eff.innerText=Math.max(100-wear*0.7-heat*0.02,20).toFixed(1);
+ wearTxt.innerText=wear.toFixed(1);
+ failProbTxt.innerText=failProb.toFixed(1);
+
+ chart.data.labels.push(time++);
+ chart.data.datasets[0].data.push(vib);
+ if(chart.data.labels.length>50){
+  chart.data.labels.shift();
+  chart.data.datasets[0].data.shift();
+ }
+ chart.update();
+}
+
+setInterval(simulate,700);
+</script>
+
+</body>
+</html>
